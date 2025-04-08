@@ -105,8 +105,12 @@ class MainWindow(QWidget):
             self.base_folder, self.current_timestamp, self.selected_nodes)
         calib = load_calibrations(self.base_folder)
 
-        pcd = stitch_pointclouds(lidar_data, calib)
-        print(f"Center of point cloud: {pcd.get_center()}")
+        # Generate consistent color map for nodes
+        cmap = plt.get_cmap('tab10')
+        node_colors = {node_id: cmap(i % 10)[:3] for i, node_id in enumerate(
+            sorted(self.selected_nodes))}
+
+        pcd = stitch_pointclouds(lidar_data, calib, node_colors)
         # Create XY ground plane
         ground_plane = self.create_xy_ground_plane(center=(-580, 530))
         # Visualize
@@ -117,4 +121,44 @@ class MainWindow(QWidget):
         vis.run()
 
         # o3d.visualization.draw_geometries([pcd])
+
+        # Visualize projection with consistent colors and transparency
+        alpha = 0.6  # transparency
+        
+
+        for node_id in self.selected_nodes:
+            if not self.selected_nodes[node_id]:
+                continue
+
+            for side in ['left', 'right']:
+                img = load_image(self.base_folder,
+                                self.current_timestamp, node_id, side)
+                if img is None:
+                    continue
+
+                intrinsic = np.array(
+                    calib[f"{node_id}_{side}"]["intrinsic_matrix"])
+                camera_to_lidar = np.array(
+                    calib[f"{node_id}_{side}"]["camera_to_lidar"])  # lidar-to-camera
+                lidar_to_ground = np.array(
+                    calib[f'lidar_{node_id}']['lidar_to_ground'])
+                ground_to_global = np.array(
+                    calib[f'lidar_{node_id}']['ground_to_global'])
+                transform = ground_to_global @ lidar_to_ground @ camera_to_lidar
+                extrinsic = np.linalg.inv(transform)
+
+                # Get points in LiDAR frame (from the stitched cloud)
+                points = np.asarray(pcd.points)
+                colors = np.asarray(pcd.colors)
+
+                # Project points to image
+                img_proj = project_points_to_image(
+                    points, intrinsic, extrinsic, img.copy(), colors, alpha)
+
+                # Display image with projection
+                window_name = f'Node {node_id} - {side}'
+                cv2.imshow(window_name, cv2.resize(img_proj, None, fx=0.5, fy=0.5))
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 

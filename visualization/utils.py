@@ -32,38 +32,55 @@ def load_calibrations(base):
     return calib
 
 
-def stitch_pointclouds(lidar_data, calib):
+def stitch_pointclouds(lidar_data, calib, node_colors):
     stitched_pcd = o3d.geometry.PointCloud()
-    cmap = plt.get_cmap('tab10')
 
-    for idx, (node_id, points) in enumerate(lidar_data.items()):
+    for idx, (node_id, points) in enumerate(sorted(lidar_data.items())):
         transform_lidar_to_ground = np.array(calib[f'lidar_{node_id}']['lidar_to_ground'])
         transform_ground_to_global = np.array(calib[f'lidar_{node_id}']['ground_to_global'])
         transform = transform_ground_to_global @ transform_lidar_to_ground
         pc = o3d.geometry.PointCloud()
         pc.points = o3d.utility.Vector3dVector(points[:, :3])
         pc.transform(transform)
-
-        color = cmap(idx % 10)[:3]
+        color = node_colors[node_id]
         pc.paint_uniform_color(color)
         stitched_pcd += pc
     return stitched_pcd
 
 
-def project_points_to_image(points, intrinsic, extrinsic, image):
-    P = intrinsic @ extrinsic[:3, :]
-    homo_pts = np.hstack((points[:, :3], np.ones((points.shape[0], 1)))).T
-    proj_pts = P @ homo_pts
+def project_points_to_image(points, intrinsic, extrinsic, image, colors, alpha=0.6):
+    overlay = image.copy()
+    points_hom = np.hstack([points, np.ones((points.shape[0], 1))])
+    points_cam = extrinsic @ points_hom.T
+    points_cam = points_cam[:3, :]
+
+    valid_mask = points_cam[2, :] > 0
+    points_cam = points_cam[:, valid_mask]
+    colors_cam = colors[valid_mask]
+
+    proj_pts = intrinsic @ points_cam
     proj_pts[:2, :] /= proj_pts[2, :]
-    u, v = proj_pts[:2, :]
-    mask = (proj_pts[2, :] > 0) & (u >= 0) & (
-        u < image.shape[1]) & (v >= 0) & (v < image.shape[0])
-    for x, y in zip(u[mask].astype(int), v[mask].astype(int)):
-        cv2.circle(image, (x, y), 2, (0, 255, 0), -1)
-    return image
+
+    u, v = proj_pts[0, :].astype(int), proj_pts[1, :].astype(int)
+    height, width = image.shape[:2]
+    valid_pixels = (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    u, v = u[valid_pixels], v[valid_pixels]
+    colors_valid = colors_cam[valid_pixels,:]
+
+    for x, y, color in zip(u, v, colors_valid):
+        color = tuple((color * 255).astype(int).tolist())
+        cv2.circle(overlay, (x, y), 3, color, -1)
+
+    # Blend original image with overlay
+    blended = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+    return blended
 
 
 def load_image(base, timestamp, node_id, side):
-    img_path = os.path.join(base, 'PcImage', timestamp,
-                            'camera', f'{node_id}_{side}_{timestamp}.jpg')
-    return cv2.imread(img_path)
+    img_folder_path = os.path.join(base, 'PcImage', timestamp, 'camera')
+    # match the one starting with {node_id}_{side}
+    # img_path = os.path.join(base, 'PcImage', timestamp,
+    #                         'camera', f'{node_id}_{side}_{timestamp}.jpg')
+    for file in os.listdir(img_folder_path):
+        if file.startswith(f"{node_id}_{side}"):
+            return cv2.imread(os.path.join(img_folder_path, file))
