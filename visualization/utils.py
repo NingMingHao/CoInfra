@@ -57,13 +57,35 @@ def stitch_pointclouds(lidar_data, calib, node_colors, use_height_color):
     return stitched_pcd
 
 
+def draw_colored_circles_fast(overlay, u, v, colors_valid, radius=4):
+    # Step 1: Quantize to voxel grid
+    voxel_size = radius * 3  # or slightly less for higher density
+    u_q = (u // voxel_size).astype(np.int32)
+    v_q = (v // voxel_size).astype(np.int32)
+
+    # Step 2: Combine into 1D keys and find unique ones
+    grid_keys = (v_q << 16) + u_q  # unique per voxel
+    _, unique_indices = np.unique(grid_keys, return_index=True)
+
+    # Step 3: Use unique indices to sample reduced set
+    u_ds = u[unique_indices]
+    v_ds = v[unique_indices]
+    color_ds = (colors_valid[unique_indices] * 255).astype(np.uint8)
+
+    # Step 4: Draw circles
+    for x, y, color in zip(u_ds, v_ds, color_ds):
+        cv2.circle(overlay, (x, y), radius, tuple(int(c) for c in color), -1)
+
+    return overlay
+
+
 def project_points_to_image(points, intrinsic, extrinsic, image, colors, alpha=0.6):
     overlay = image.copy()
     points_hom = np.hstack([points, np.ones((points.shape[0], 1))])
     points_cam = extrinsic @ points_hom.T
     points_cam = points_cam[:3, :]
 
-    valid_mask = points_cam[2, :] > 0
+    valid_mask = (points_cam[2, :] > 0) & (points_cam[2, :] < 60)
     points_cam = points_cam[:, valid_mask]
     colors_cam = colors[valid_mask]
 
@@ -76,13 +98,16 @@ def project_points_to_image(points, intrinsic, extrinsic, image, colors, alpha=0
     u, v = u[valid_pixels], v[valid_pixels]
     colors_valid = colors_cam[valid_pixels,:]
 
-    for x, y, color in zip(u, v, colors_valid):
-        color = tuple((color * 255).astype(int).tolist())
-        cv2.circle(overlay, (x, y), 3, color, -1)
+    # for x, y, color in zip(u, v, colors_valid):
+    #     color = tuple((color * 255).astype(int).tolist())
+    #     cv2.circle(overlay, (x, y), 4, color, -1)
+
+    overlay = draw_colored_circles_fast(overlay, u, v, colors_valid, radius=4)
 
     # Blend original image with overlay
     blended = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
     return blended
+
 
 
 def load_image(base, timestamp, node_id, side):

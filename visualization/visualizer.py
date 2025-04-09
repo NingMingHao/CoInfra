@@ -1,4 +1,5 @@
-from multiprocessing import Process
+from multiprocessing import Process, Pipe
+from concurrent.futures import ThreadPoolExecutor
 import open3d as o3d
 import numpy as np
 import cv2
@@ -11,18 +12,29 @@ from PyQt5.QtGui import QPixmap, QImage
 from utils import *
 
 
-def visualize_pointcloud_worker(base_folder, timestamp, selected_nodes, node_colors, use_height_color=False):
-    lidar_data = load_lidar_npys(base_folder, timestamp, selected_nodes)
-    calib = load_calibrations(base_folder)
-    pcd = stitch_pointclouds(lidar_data, calib, node_colors, use_height_color)
+def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, conn):
+    def load_and_prepare_pcd(ts):
+        lidar_data = load_lidar_npys(base_folder, ts, selected_nodes)
+        calib = load_calibrations(base_folder)
+        return stitch_pointclouds(lidar_data, calib, node_colors, use_height_color)
+
+    pcd = load_and_prepare_pcd(initial_timestamp)
     ground_plane = create_xy_ground_plane(center=(-580, 530))
 
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name='Pointcloud')
     vis.add_geometry(ground_plane)
     vis.add_geometry(pcd)
-    vis.run()
-    vis.destroy_window()
+
+    while True:
+        vis.poll_events()
+        vis.update_renderer()
+        if conn.poll():  # Check if there's a new timestamp
+            new_ts = conn.recv()
+            pcd_new = load_and_prepare_pcd(new_ts)
+            pcd.points = pcd_new.points
+            pcd.colors = pcd_new.colors
+            vis.update_geometry(pcd)
 
 
 class MainWindow(QWidget):
@@ -37,6 +49,7 @@ class MainWindow(QWidget):
         self.selected_nodes = {i: True for i in range(4, 12)}
         self.node_colors = {}
 
+        self.pcd_conn = None
         self.pcd_process = None
         self.use_height_color = True
 
@@ -117,69 +130,94 @@ class MainWindow(QWidget):
         cmap = plt.get_cmap('tab10')
         self.node_colors = {node_id: cmap(
             i % 10)[:3] for i, node_id in enumerate(sorted(self.selected_nodes))}
-        # Terminate previous process if running
-        if self.pcd_process is not None and self.pcd_process.is_alive():
-            self.pcd_process.terminate()
-            self.pcd_process.join()
 
-        # Start new process
-        self.pcd_process = Process(target=visualize_pointcloud_worker,
-                                args=(self.base_folder, self.current_timestamp,
-                                        self.selected_nodes, self.node_colors, self.use_height_color))
-        self.pcd_process.start()
+        if self.pcd_process is None or not self.pcd_process.is_alive():
+            # Setup a new pipe and process if not running
+            parent_conn, child_conn = Pipe()
+            self.pcd_conn = parent_conn
+            self.pcd_process = Process(target=visualize_pointcloud_worker,
+                                    args=(self.base_folder, self.current_timestamp,
+                                            self.selected_nodes, self.node_colors,
+                                            self.use_height_color, child_conn))
+            self.pcd_process.start()
+        else:
+            # Send new timestamp to existing process
+            if self.pcd_conn:
+                self.pcd_conn.send(self.current_timestamp)
+
         self.visualize_images()
-
 
     def visualize_images(self):
         clear_layout(self.image_layout)
         lidar_data = load_lidar_npys(
             self.base_folder, self.current_timestamp, self.selected_nodes)
         calib = load_calibrations(self.base_folder)
-        pcd = stitch_pointclouds(lidar_data, calib, self.node_colors, self.use_height_color)
+        pcd = stitch_pointclouds(
+            lidar_data, calib, self.node_colors, self.use_height_color)
 
         alpha = 0.6
-        row, col = 0, 0
+        points = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors)
+
+        def process_view_data(node_id, side):
+            img = load_image(self.base_folder,
+                            self.current_timestamp, node_id, side)
+
+            if img is None:
+                return None
+
+            intrinsic = np.array(calib[f"{node_id}_{side}"]["intrinsic_matrix"])
+            camera_to_lidar = np.array(
+                calib[f"{node_id}_{side}"]["camera_to_lidar"])
+            lidar_to_ground = np.array(
+                calib[f'lidar_{node_id}']['lidar_to_ground'])
+            ground_to_global = np.array(
+                calib[f'lidar_{node_id}']['ground_to_global'])
+            transform = ground_to_global @ lidar_to_ground @ camera_to_lidar
+            extrinsic = np.linalg.inv(transform)
+
+            img_proj = project_points_to_image(
+                points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            
+            return img_proj  # raw image only
+
+        # Collect all tasks
+        tasks = []
         for node_id in self.selected_nodes:
             if not self.selected_nodes[node_id]:
                 continue
             for side in ['left', 'right']:
-                img = load_image(self.base_folder,
-                                 self.current_timestamp, node_id, side)
-                if img is None:
-                    continue
+                tasks.append((node_id, side))
 
-                intrinsic = np.array(
-                    calib[f"{node_id}_{side}"]["intrinsic_matrix"])
-                camera_to_lidar = np.array(
-                    calib[f"{node_id}_{side}"]["camera_to_lidar"])
-                lidar_to_ground = np.array(
-                    calib[f'lidar_{node_id}']['lidar_to_ground'])
-                ground_to_global = np.array(
-                    calib[f'lidar_{node_id}']['ground_to_global'])
-                transform = ground_to_global @ lidar_to_ground @ camera_to_lidar
-                extrinsic = np.linalg.inv(transform)
+        # Run all image processing in parallel (non-GUI)
+        results = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(process_view_data, node_id, side)
+                    for node_id, side in tasks]
+            for future in futures:
+                img_proj = future.result()
+                if img_proj is not None:
+                    results.append(img_proj)
 
-                points = np.asarray(pcd.points)
-                colors = np.asarray(pcd.colors)
+        # Now safely create Qt widgets from results (main thread)
+        row, col = 0, 0
+        for img_proj in results:
+            img_display = cv2.cvtColor(img_proj, cv2.COLOR_BGR2RGB)
+            h, w, ch = img_display.shape
+            bytes_per_line = ch * w
+            qimg = QImage(img_display.data, w, h,
+                        bytes_per_line, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg).scaled(320, 240, Qt.KeepAspectRatio)
 
-                img_proj = project_points_to_image(
-                    points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            lbl = QLabel()
+            lbl.setPixmap(pixmap)
+            lbl.mousePressEvent = lambda e, i=img_proj: self.open_image(i)
 
-                img_display = cv2.cvtColor(img_proj, cv2.COLOR_BGR2RGB)
-                h, w, ch = img_display.shape
-                bytes_per_line = ch * w
-                qimg = QImage(img_display.data, w, h,
-                              bytes_per_line, QImage.Format_RGB888)
-                pixmap = QPixmap.fromImage(qimg).scaled(
-                    320, 240, Qt.KeepAspectRatio)
-                lbl = QLabel()
-                lbl.setPixmap(pixmap)
-                lbl.mousePressEvent = lambda e, i=img_proj: self.open_image(i)
-                self.image_layout.addWidget(lbl, row, col)
-                col += 1
-                if col >= 4:
-                    col = 0
-                    row += 1
+            self.image_layout.addWidget(lbl, row, col)
+            col += 1
+            if col >= 4:
+                col = 0
+                row += 1
 
     def open_image(self, img):
         cv2.namedWindow("Detailed View", cv2.WINDOW_NORMAL)
