@@ -4,6 +4,25 @@ import yaml
 import cv2
 import open3d as o3d
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation as R
+
+
+def matrix_to_tf(matrix):
+    trans = matrix[:3, 3]
+    rot = matrix[:3, :3]
+    euler = R.from_matrix(rot).as_euler(
+        'xyz')[::-1]  # returns [yaw, pitch, roll]
+    return {'translation': trans.tolist(), 'rotation': euler.tolist()}
+
+
+def tf_to_matrix(tf_dict):
+    trans = tf_dict['translation']
+    euler = tf_dict['rotation']
+    rot_mat = R.from_euler('xyz', euler[::-1]).as_matrix()
+    tf_mat = np.eye(4)
+    tf_mat[:3, :3] = rot_mat
+    tf_mat[:3, 3] = trans
+    return tf_mat
 
 
 def load_lidar_npys(base, timestamp, selected_nodes):
