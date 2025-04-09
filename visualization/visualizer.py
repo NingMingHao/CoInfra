@@ -55,6 +55,10 @@ class MainWindow(QWidget):
         self.min_z = 0.4
         self.max_z = 4.0
 
+        self.detailed_image = None  # Holds the currently displayed detailed image
+        self.detailed_window_open = False
+        self.detailed_view_source = None  # (node_id, 'left' or 'right')
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -229,16 +233,25 @@ class MainWindow(QWidget):
         # Run all image processing in parallel (non-GUI)
         results = []
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(process_view_data, node_id, side)
-                    for node_id, side in tasks]
+            futures = {
+                executor.submit(process_view_data, node_id, side): (node_id, side)
+                for node_id, side in tasks
+            }
+
             for future in futures:
+                node_id, side = futures[future]
                 img_proj = future.result()
                 if img_proj is not None:
-                    results.append(img_proj)
+                    results.append((node_id, side, img_proj))
 
         # Now safely create Qt widgets from results (main thread)
         row, col = 0, 0
-        for img_proj in results:
+        for node_id, side, img_proj in results:
+            # Update the detailed image from results if needed
+            if self.detailed_window_open and self.detailed_view_source and self.detailed_view_source[0] == node_id and self.detailed_view_source[1] == side:
+                self.detailed_image = img_proj
+                cv2.imshow("Detailed View", img_proj)
+
             img_display = cv2.cvtColor(img_proj, cv2.COLOR_BGR2RGB)
             h, w, ch = img_display.shape
             bytes_per_line = ch * w
@@ -248,7 +261,10 @@ class MainWindow(QWidget):
 
             lbl = QLabel()
             lbl.setPixmap(pixmap)
-            lbl.mousePressEvent = lambda e, i=img_proj: self.open_image(i)
+            # lbl.mousePressEvent = lambda e, i=img_proj: self.open_image(i)
+            lbl.mousePressEvent = lambda e, i=img_proj, nid=node_id, s=side: self.open_image(
+                i, nid, s)
+
 
             self.image_layout.addWidget(lbl, row, col)
             col += 1
@@ -256,7 +272,15 @@ class MainWindow(QWidget):
                 col = 0
                 row += 1
 
-    def open_image(self, img):
+        if self.detailed_window_open and self.detailed_image is not None:
+            cv2.imshow("Detailed View", self.detailed_image)
+            cv2.waitKey(1)
+
+    def open_image(self, img, node_id, side):
+        self.detailed_image = img
+        self.detailed_view_source = (node_id, side)
+        self.detailed_window_open = True
+
         cv2.namedWindow("Detailed View", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Detailed View", 960, 600)
         cv2.imshow("Detailed View", img)
