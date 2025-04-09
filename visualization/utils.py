@@ -32,20 +32,23 @@ def load_calibrations(base):
     return calib
 
 
-def stitch_pointclouds(lidar_data, calib, node_colors, use_height_color):
+def stitch_pointclouds(lidar_data, calib, node_colors, use_height_color, z_min=0.4, z_max=4.0):
     stitched_pcd = o3d.geometry.PointCloud()
 
     for idx, (node_id, points) in enumerate(sorted(lidar_data.items())):
         transform_lidar_to_ground = np.array(calib[f'lidar_{node_id}']['lidar_to_ground'])
         transform_ground_to_global = np.array(calib[f'lidar_{node_id}']['ground_to_global'])
         transform = transform_ground_to_global @ transform_lidar_to_ground
+
+        # Transform points to global frame
+        points_hom = np.hstack([points[:, :3], np.ones((points.shape[0], 1))])
+        points_global = (transform @ points_hom.T).T[:, :3]
+
         pc = o3d.geometry.PointCloud()
-        pc.points = o3d.utility.Vector3dVector(points[:, :3])
-        pc.transform(transform)
+        pc.points = o3d.utility.Vector3dVector(points_global)
+
         if use_height_color:
-            z = points[:, 2]
-            z_min = 0.4
-            z_max = 4.0
+            z = points_global[:, 2]
             z = np.clip(z, z_min, z_max)
             z_normalized = (z - z_min) / (z_max - z_min)
             colors = plt.get_cmap('rainbow')(z_normalized)[:, :3]
@@ -53,7 +56,9 @@ def stitch_pointclouds(lidar_data, calib, node_colors, use_height_color):
         else:
             color = node_colors[node_id]
             pc.paint_uniform_color(color)
+
         stitched_pcd += pc
+
     return stitched_pcd
 
 
@@ -70,7 +75,8 @@ def draw_colored_circles_fast(overlay, u, v, colors_valid, radius=4):
     # Step 3: Use unique indices to sample reduced set
     u_ds = u[unique_indices]
     v_ds = v[unique_indices]
-    color_ds = (colors_valid[unique_indices] * 255).astype(np.uint8)
+    # reorder the color from rgb to bgr
+    color_ds = (colors_valid[unique_indices] * 255).astype(np.uint8)[:, ::-1]
 
     # Step 4: Draw circles
     for x, y, color in zip(u_ds, v_ds, color_ds):
@@ -79,7 +85,7 @@ def draw_colored_circles_fast(overlay, u, v, colors_valid, radius=4):
     return overlay
 
 
-def project_points_to_image(points, intrinsic, extrinsic, image, colors, alpha=0.6):
+def project_points_to_image(points, intrinsic, extrinsic, image, colors, alpha=0.7):
     overlay = image.copy()
     points_hom = np.hstack([points, np.ones((points.shape[0], 1))])
     points_cam = extrinsic @ points_hom.T

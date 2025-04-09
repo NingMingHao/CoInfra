@@ -4,7 +4,7 @@ import open3d as o3d
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from PyQt5.QtWidgets import (QWidget, QCheckBox, QPushButton, QVBoxLayout,
+from PyQt5.QtWidgets import (QWidget, QCheckBox, QPushButton, QVBoxLayout, QLineEdit,
                              QHBoxLayout, QFileDialog, QLabel, QSlider, QGridLayout,
                              QScrollArea)
 from PyQt5.QtCore import Qt
@@ -12,13 +12,13 @@ from PyQt5.QtGui import QPixmap, QImage
 from utils import *
 
 
-def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, conn):
-    def load_and_prepare_pcd(ts):
+def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, min_z, max_z, conn):
+    def load_and_prepare_pcd(ts, use_height_color, min_z, max_z):
         lidar_data = load_lidar_npys(base_folder, ts, selected_nodes)
         calib = load_calibrations(base_folder)
-        return stitch_pointclouds(lidar_data, calib, node_colors, use_height_color)
+        return stitch_pointclouds(lidar_data, calib, node_colors, use_height_color, min_z, max_z)
 
-    pcd = load_and_prepare_pcd(initial_timestamp)
+    pcd = load_and_prepare_pcd(initial_timestamp, use_height_color, min_z, max_z)
     ground_plane = create_xy_ground_plane(center=(-580, 530))
 
     vis = o3d.visualization.Visualizer()
@@ -30,8 +30,8 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
         vis.poll_events()
         vis.update_renderer()
         if conn.poll():  # Check if there's a new timestamp
-            new_ts = conn.recv()
-            pcd_new = load_and_prepare_pcd(new_ts)
+            new_ts, use_height_color, min_z, max_z = conn.recv()
+            pcd_new = load_and_prepare_pcd(new_ts, use_height_color, min_z, max_z)
             pcd.points = pcd_new.points
             pcd.colors = pcd_new.colors
             vis.update_geometry(pcd)
@@ -52,6 +52,8 @@ class MainWindow(QWidget):
         self.pcd_conn = None
         self.pcd_process = None
         self.use_height_color = True
+        self.min_z = 0.4
+        self.max_z = 4.0
 
         self.setup_ui()
 
@@ -90,10 +92,28 @@ class MainWindow(QWidget):
         self.image_area.setWidget(self.image_widget)
         layout.addWidget(self.image_area)
 
+        z_control_layout = QHBoxLayout()
+
         self.height_color_cb = QCheckBox("Use Height Color")
-        self.height_color_cb.setChecked(True)  # Default value
+        self.height_color_cb.setChecked(True)
         self.height_color_cb.stateChanged.connect(self.toggle_height_color)
-        layout.addWidget(self.height_color_cb)
+        z_control_layout.addWidget(self.height_color_cb)
+
+        z_control_layout.addWidget(QLabel("Min Z:"))
+        self.min_z_input = QLineEdit(str(self.min_z))
+        self.min_z_input.setFixedWidth(60)
+        z_control_layout.addWidget(self.min_z_input)
+
+        z_control_layout.addWidget(QLabel("Max Z:"))
+        self.max_z_input = QLineEdit(str(self.max_z))
+        self.max_z_input.setFixedWidth(60)
+        z_control_layout.addWidget(self.max_z_input)
+
+        self.update_z_btn = QPushButton("Update Z Range")
+        self.update_z_btn.clicked.connect(self.update_z_range)
+        z_control_layout.addWidget(self.update_z_btn)
+
+        layout.addLayout(z_control_layout)
 
         self.setLayout(layout)
 
@@ -122,6 +142,23 @@ class MainWindow(QWidget):
         self.use_height_color = state == Qt.Checked
         self.visualize()  # Optional: auto refresh when toggled
 
+    def update_z_range(self):
+        try:
+            print("Updating Z range, z_min:", self.min_z_input.text(), "z_max:", self.max_z_input.text())
+            # check if the min_z and max_z have changed
+            if self.min_z_input.text() == str(self.min_z) and self.max_z_input.text() == str(self.max_z):
+                return
+            else:
+                self.min_z = float(self.min_z_input.text())
+                self.max_z = float(self.max_z_input.text())
+                # make sure min_z < max_z
+                if self.min_z >= self.max_z:
+                    raise ValueError("min_z should be less than max_z")
+                self.visualize()
+        except ValueError:
+            self.min_z = 0.4
+            self.max_z = 4.0
+
     def update_nodes(self):
         for node_id, checkbox in self.node_checkboxes.items():
             self.selected_nodes[node_id] = checkbox.isChecked()
@@ -138,12 +175,12 @@ class MainWindow(QWidget):
             self.pcd_process = Process(target=visualize_pointcloud_worker,
                                     args=(self.base_folder, self.current_timestamp,
                                             self.selected_nodes, self.node_colors,
-                                            self.use_height_color, child_conn))
+                                            self.use_height_color, self.min_z, self.max_z, child_conn))
             self.pcd_process.start()
         else:
             # Send new timestamp to existing process
             if self.pcd_conn:
-                self.pcd_conn.send(self.current_timestamp)
+                self.pcd_conn.send((self.current_timestamp, self.use_height_color, self.min_z, self.max_z))
 
         self.visualize_images()
 
@@ -153,7 +190,7 @@ class MainWindow(QWidget):
             self.base_folder, self.current_timestamp, self.selected_nodes)
         calib = load_calibrations(self.base_folder)
         pcd = stitch_pointclouds(
-            lidar_data, calib, self.node_colors, self.use_height_color)
+            lidar_data, calib, self.node_colors, self.use_height_color, self.min_z, self.max_z)
 
         alpha = 0.6
         points = np.asarray(pcd.points)
