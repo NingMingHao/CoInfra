@@ -32,7 +32,7 @@ def load_calibrations(base):
     return calib
 
 
-def stitch_pointclouds(lidar_data, calib, node_colors):
+def stitch_pointclouds(lidar_data, calib, node_colors, use_height_color):
     stitched_pcd = o3d.geometry.PointCloud()
 
     for idx, (node_id, points) in enumerate(sorted(lidar_data.items())):
@@ -42,8 +42,17 @@ def stitch_pointclouds(lidar_data, calib, node_colors):
         pc = o3d.geometry.PointCloud()
         pc.points = o3d.utility.Vector3dVector(points[:, :3])
         pc.transform(transform)
-        color = node_colors[node_id]
-        pc.paint_uniform_color(color)
+        if use_height_color:
+            z = points[:, 2]
+            z_min = 0.4
+            z_max = 4.0
+            z = np.clip(z, z_min, z_max)
+            z_normalized = (z - z_min) / (z_max - z_min)
+            colors = plt.get_cmap('rainbow')(z_normalized)[:, :3]
+            pc.colors = o3d.utility.Vector3dVector(colors)
+        else:
+            color = node_colors[node_id]
+            pc.paint_uniform_color(color)
         stitched_pcd += pc
     return stitched_pcd
 
@@ -84,3 +93,30 @@ def load_image(base, timestamp, node_id, side):
     for file in os.listdir(img_folder_path):
         if file.startswith(f"{node_id}_{side}"):
             return cv2.imread(os.path.join(img_folder_path, file))
+
+def create_xy_ground_plane(width=100, height=100, resolution=1.0, center=(0, 0)):
+    # Generate grid points on XY plane (Z=0)
+    x = np.arange(-width / 2, width / 2, resolution) + center[0]
+    y = np.arange(-height / 2, height / 2, resolution) + center[1]
+    xx, yy = np.meshgrid(x, y)
+    zz = np.zeros_like(xx)
+    points = np.vstack((xx.flatten(), yy.flatten(), zz.flatten())).T
+
+    # Generate triangles
+    rows, cols = xx.shape
+    triangles = []
+    for i in range(rows - 1):
+        for j in range(cols - 1):
+            idx0 = i * cols + j
+            idx1 = idx0 + 1
+            idx2 = idx0 + cols
+            idx3 = idx2 + 1
+            triangles.append([idx0, idx2, idx1])
+            triangles.append([idx1, idx2, idx3])
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(points)
+    mesh.triangles = o3d.utility.Vector3iVector(np.array(triangles))
+    mesh.paint_uniform_color([0.5, 0.5, 0.5])
+    mesh.compute_vertex_normals()
+    return mesh
