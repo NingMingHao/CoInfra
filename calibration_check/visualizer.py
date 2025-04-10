@@ -53,8 +53,8 @@ class MainWindow(QWidget):
         self.pcd_conn = None
         self.pcd_process = None
         self.use_height_color = True
-        self.min_z = 0.4
-        self.max_z = 4.0
+        self.min_z = -0.5
+        self.max_z = 0.5
 
         self.detailed_image = None  # Holds the currently displayed detailed image
         self.detailed_window_open = False
@@ -160,6 +160,14 @@ class MainWindow(QWidget):
         self.update_tf_btn.clicked.connect(self.update_calib_matrix)
         calib_panel.addWidget(self.update_tf_btn)
 
+        # Set the exact roll angle for node4
+        self.roll_adjust_input = QLineEdit("0.0")  # in radian
+        self.apply_roll_btn = QPushButton("Apply Roll to Node4")
+        self.apply_roll_btn.clicked.connect(self.apply_roll_to_node4)
+        calib_panel.addWidget(QLabel("Extra Roll for Node4 (rad):"))
+        calib_panel.addWidget(self.roll_adjust_input)
+        calib_panel.addWidget(self.apply_roll_btn)
+
         main_layout.addLayout(calib_panel, 1)
         self.setLayout(main_layout)
 
@@ -212,6 +220,16 @@ class MainWindow(QWidget):
         for i, key in enumerate(['yaw', 'pitch', 'roll']):
             self.tf_fields[key].setText(str(round(rot[i], 6)))
 
+
+    def apply_roll_to_node4(self):
+        try:
+            delta_rad = float(self.roll_adjust_input.text())
+            apply_roll_to_node4_and_propagate(self.calib, delta_rad)
+            self.visualize()
+        except ValueError:
+            print("❌ Invalid roll input.")
+
+
     def update_calib_matrix(self):
         node = self.node_select.currentText()
         tf_key = self.calib_type_select.currentText()
@@ -219,6 +237,8 @@ class MainWindow(QWidget):
         if 'camera' in tf_key:
             side = 'left' if 'left' in tf_key else 'right'
             calib_key = f"{node}_{side}"
+            # remove the side from the tf_key
+            tf_key = tf_key.replace(f"{side}_", "")
         else:
             calib_key = f"lidar_{node}"
 

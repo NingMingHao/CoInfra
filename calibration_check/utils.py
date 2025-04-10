@@ -25,6 +25,31 @@ def tf_to_matrix(tf_dict):
     return tf_mat
 
 
+def apply_roll_to_node4_and_propagate(calib, roll_rad):
+    # Get original T_global_node4
+    T_global_node4 = np.array(calib['lidar_4']['ground_to_global'])
+
+    # Apply roll to node 4's ground_to_global
+    tf = matrix_to_tf(T_global_node4)
+    tf['rotation'][2] = roll_rad  # roll is last in [yaw, pitch, roll]
+    T_new_global_node4 = tf_to_matrix(tf)
+
+    # For each other node, compute relative transform and update
+    for i in range(4, 12):
+        key = f'lidar_{i}'
+        if i == 4:
+            calib[key]['ground_to_global'] = T_new_global_node4.tolist()
+            continue
+
+        T_global_i = np.array(calib[key]['ground_to_global'])
+        T_node4_to_i = np.linalg.inv(T_global_node4) @ T_global_i
+        T_new_global_i = T_new_global_node4 @ T_node4_to_i
+        calib[key]['ground_to_global'] = T_new_global_i.tolist()
+
+    print(
+        f"✅ Applied roll {np.degrees(roll_rad):.2f}° to node4 and updated all ground_to_global")
+
+
 def load_lidar_npys(base, timestamp, selected_nodes):
     lidar_path = os.path.join(base, 'PcImage', timestamp, 'lidar')
     lidar_data = {}
