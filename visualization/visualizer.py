@@ -23,27 +23,34 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
 
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name='Pointcloud')
+    # set background color to black
+    vis.get_render_option().background_color = np.array([0, 0, 0])
+    vis.get_render_option().point_size = 2
+
     vis.add_geometry(ground_plane)
     vis.add_geometry(pcd)
 
     # visualize the bounding boxes
     bbox_objs = []
-    label_objs = []
+    # label_objs = []
     if show_bbox:
         bboxes = load_global_bboxes(base_folder, initial_timestamp)
         for obj in bboxes:
             box = create_bbox_o3d(obj)
             bbox_objs.append(box)
             vis.add_geometry(box)
-            label = create_bbox_label(obj)
-            label_objs.append(label)
-            vis.add_geometry(label)
+            # label = create_bbox_label(obj)
+            # label_objs.append(label)
+            # vis.add_geometry(label)
 
     while True:
         vis.poll_events()
         vis.update_renderer()
 
         if conn.poll():
+            view_ctrl = vis.get_view_control()
+            cam_params = view_ctrl.convert_to_pinhole_camera_parameters()
+
             new_ts, use_height_color, show_bbox, min_z, max_z = conn.recv()
             pcd_new = load_and_prepare_pcd(new_ts, use_height_color, min_z, max_z)
             pcd.points = pcd_new.points
@@ -54,10 +61,10 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
             for box in bbox_objs:
                 vis.remove_geometry(box)
             bbox_objs.clear()
-            # Remove old labels
-            for label in label_objs:
-                vis.remove_geometry(label)
-            label_objs.clear()
+            # # Remove old labels
+            # for label in label_objs:
+            #     vis.remove_geometry(label)
+            # label_objs.clear()
 
             # Add new bboxes
             if show_bbox:
@@ -66,9 +73,12 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
                     box = create_bbox_o3d(obj)
                     bbox_objs.append(box)
                     vis.add_geometry(box)
-                    label = create_bbox_label(obj)
-                    label_objs.append(label)
-                    vis.add_geometry(label)
+                    # label = create_bbox_label(obj)
+                    # label_objs.append(label)
+                    # vis.add_geometry(label)
+
+            # Restore previous camera
+            view_ctrl.convert_from_pinhole_camera_parameters(cam_params)
 
 
 
@@ -88,6 +98,7 @@ class MainWindow(QWidget):
         self.pcd_process = None
         self.use_height_color = True
         self.show_bbox = True
+        self.project_pcd_to_image = True
         self.min_z = 0.4
         self.max_z = 4.0
 
@@ -134,15 +145,20 @@ class MainWindow(QWidget):
 
         z_control_layout = QHBoxLayout()
 
-        self.height_color_cb = QCheckBox("Use Height Color")
-        self.height_color_cb.setChecked(True)
-        self.height_color_cb.stateChanged.connect(self.toggle_height_color)
-        z_control_layout.addWidget(self.height_color_cb)
-
         self.show_bbox_cb = QCheckBox("Show Bounding Boxes")
         self.show_bbox_cb.setChecked(True)
         self.show_bbox_cb.stateChanged.connect(self.toggle_show_bbox)
         z_control_layout.addWidget(self.show_bbox_cb)
+
+        self.project_pcd_cb = QCheckBox("Project PC to Image")
+        self.project_pcd_cb.setChecked(True)
+        self.project_pcd_cb.stateChanged.connect(self.toggle_project_pcd)
+        z_control_layout.addWidget(self.project_pcd_cb)
+
+        self.height_color_cb = QCheckBox("Use Height Color")
+        self.height_color_cb.setChecked(True)
+        self.height_color_cb.stateChanged.connect(self.toggle_height_color)
+        z_control_layout.addWidget(self.height_color_cb)
 
         z_control_layout.addWidget(QLabel("Min Z:"))
         self.min_z_input = QLineEdit(str(self.min_z))
@@ -190,6 +206,10 @@ class MainWindow(QWidget):
     def toggle_show_bbox(self, state):
         self.show_bbox = state == Qt.Checked
         self.visualize()
+
+    def toggle_project_pcd(self, state):
+        self.project_pcd_to_image = state == Qt.Checked
+        self.visualize_images()
 
     def update_z_range(self):
         try:
@@ -263,8 +283,13 @@ class MainWindow(QWidget):
             transform = ground_to_global @ lidar_to_ground @ camera_to_lidar
             extrinsic = np.linalg.inv(transform)
 
-            img_proj = project_points_to_image(
-                points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            # img_proj = project_points_to_image(
+            #     points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            if self.project_pcd_to_image:
+                img_proj = project_points_to_image(
+                    points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            else:
+                img_proj = img.copy()
             
             if self.show_bbox:
                 global_bboxes = load_global_bboxes(

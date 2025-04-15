@@ -174,7 +174,7 @@ def create_bbox_o3d(obj):
     R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
                                                                              0, 0, heading])
     box.R = R
-    box.color = [1, 0, 0] if obj['label'] == 'Person' else [0, 1, 0]
+    box.color = [1, 1, 1] if obj['label'] == 'Person' else [1, 1, 0]
 
     return box
 
@@ -232,50 +232,115 @@ def create_bbox_label(obj):
     return text_3d
 
 
+# def draw_projected_bbox(image, intrinsic, extrinsic, bbox, obj_id, label):
+#     l, w, h = bbox['dimensions']['length'], bbox['dimensions']['width'], bbox['dimensions']['height']
+#     x, y, z = bbox['position']['x'], bbox['position']['y'], bbox['position']['z']
+#     heading = bbox['heading']
+
+#     # Check visibility of center in camera frame
+#     center_world = np.array([x, y, z, 1.0])
+#     center_cam = extrinsic @ center_world
+#     if not (3 < center_cam[2] < 60):
+#         return image  # Skip if not in visible range
+
+#     # 3D bounding box corners in local
+#     dx = l / 2
+#     dy = w / 2
+#     dz = h / 2
+#     corners = np.array([
+#         [dx, dy, dz], [dx, -dy, dz], [-dx, -dy, dz], [-dx, dy, dz],
+#         [dx, dy, -dz], [dx, -dy, -dz], [-dx, -dy, -dz], [-dx, dy, -dz],
+#     ])
+
+#     R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
+#                                                                              0, 0, heading])
+#     corners = (R @ corners.T).T + np.array([x, y, z])
+
+#     # Project
+#     points_hom = np.hstack([corners, np.ones((8, 1))])
+#     points_cam = (extrinsic @ points_hom.T)[:3, :]
+#     proj = (intrinsic @ points_cam).T
+#     proj[:, 0] /= proj[:, 2]
+#     proj[:, 1] /= proj[:, 2]
+#     pts_2d = proj[:, :2].astype(np.int32)
+
+#     # Draw box lines
+#     lines = [(0, 1), (1, 2), (2, 3), (3, 0),
+#              (4, 5), (5, 6), (6, 7), (7, 4),
+#              (0, 4), (1, 5), (2, 6), (3, 7)]
+#     for i, j in lines:
+#         cv2.line(image, tuple(pts_2d[i]), tuple(pts_2d[j]), (0, 255, 0), 2)
+
+#     # Draw surrounding 2D bbox and label
+#     x_min, y_min = np.min(pts_2d[:, 0]), np.min(pts_2d[:, 1])
+#     x_max, y_max = np.max(pts_2d[:, 0]), np.max(pts_2d[:, 1])
+#     cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
+#     cv2.putText(image, f"{obj_id}:{label}", (x_min, y_min - 5),
+#                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+#     return image
+
 def draw_projected_bbox(image, intrinsic, extrinsic, bbox, obj_id, label):
+    h_img, w_img = image.shape[:2]
+
     l, w, h = bbox['dimensions']['length'], bbox['dimensions']['width'], bbox['dimensions']['height']
     x, y, z = bbox['position']['x'], bbox['position']['y'], bbox['position']['z']
     heading = bbox['heading']
 
-    # Check visibility of center in camera frame
-    center_world = np.array([x, y, z, 1.0])
-    center_cam = extrinsic @ center_world
-    if not (3 < center_cam[2] < 60):
-        return image  # Skip if not in visible range
-
-    # 3D bounding box corners in local
-    dx = l / 2
-    dy = w / 2
-    dz = h / 2
+    # Generate 3D corners
+    dx, dy, dz = l / 2, w / 2, h / 2
     corners = np.array([
-        [dx, dy, dz], [dx, -dy, dz], [-dx, -dy, dz], [-dx, dy, dz],
-        [dx, dy, -dz], [dx, -dy, -dz], [-dx, -dy, -dz], [-dx, dy, -dz],
+        [dx,  dy,  dz], [dx, -dy,  dz], [-dx, -dy,  dz], [-dx,  dy,  dz],
+        [dx,  dy, -dz], [dx, -dy, -dz], [-dx, -dy, -dz], [-dx,  dy, -dz],
     ])
-
     R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
                                                                              0, 0, heading])
     corners = (R @ corners.T).T + np.array([x, y, z])
 
-    # Project
+    # Project corners
     points_hom = np.hstack([corners, np.ones((8, 1))])
     points_cam = (extrinsic @ points_hom.T)[:3, :]
+    depths = points_cam[2, :]
+
+    # # Reject if all corners are behind or too far
+    # if not np.any((depths > 3) & (depths < 60)):
+    #     return image
+
+    # Reject if any corner is behind or too far
+    if np.any(depths <= 0) or np.all(depths > 60):
+        return image
+
+    # # Reject if half of the corners are behind or too far
+    # if np.count_nonzero((depths <= 0) | (depths > 60)) > 4:
+    #     return image
+
     proj = (intrinsic @ points_cam).T
     proj[:, 0] /= proj[:, 2]
     proj[:, 1] /= proj[:, 2]
     pts_2d = proj[:, :2].astype(np.int32)
 
-    # Draw box lines
+    # Count how many corners are inside image bounds
+    u, v = pts_2d[:, 0], pts_2d[:, 1]
+    inside = (u >= 0) & (u < w_img) & (v >= 0) & (v < h_img)
+
+    if np.count_nonzero(inside) < 2:
+        return image  # Too few visible corners
+
+    # Draw 3D box
     lines = [(0, 1), (1, 2), (2, 3), (3, 0),
              (4, 5), (5, 6), (6, 7), (7, 4),
              (0, 4), (1, 5), (2, 6), (3, 7)]
     for i, j in lines:
         cv2.line(image, tuple(pts_2d[i]), tuple(pts_2d[j]), (0, 255, 0), 2)
 
-    # Draw surrounding 2D bbox and label
+    # Draw 2D box + label
     x_min, y_min = np.min(pts_2d[:, 0]), np.min(pts_2d[:, 1])
     x_max, y_max = np.max(pts_2d[:, 0]), np.max(pts_2d[:, 1])
+    if x_max < 0 or x_min >= w_img or y_max < 0 or y_min >= h_img:
+        return image  # Entire box out of view
+
     cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
-    cv2.putText(image, f"{obj_id}:{label}", (x_min, y_min - 5),
+    cv2.putText(image, f"{obj_id}:{label}", (x_min, max(0, y_min - 5)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
     return image
