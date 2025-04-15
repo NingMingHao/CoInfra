@@ -40,9 +40,10 @@ train/
 │   └── HDmap/
 │       ├── transformation.yaml   # pixel <-> global transformation
 │       ├── hdmap.png
-│       ├── {node_id}_roi.png     # region of interest for node_id
-│       ├── ...
-│       └── global_roi.png        # region of interest for global frame
+│       └── ROI/
+│           ├── {node_id}_roi.png     # region of interest for node_id
+│           ├── ...
+│           └── global_roi.png        # region of interest for global frame
 └── ... # other scenarios
 
 validation/

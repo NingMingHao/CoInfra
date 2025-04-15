@@ -12,7 +12,7 @@ from PyQt5.QtGui import QPixmap, QImage
 from utils import *
 
 
-def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, min_z, max_z, conn):
+def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, show_bbox, min_z, max_z, conn):
     def load_and_prepare_pcd(ts, use_height_color, min_z, max_z):
         lidar_data = load_lidar_npys(base_folder, ts, selected_nodes)
         calib = load_calibrations(base_folder)
@@ -26,15 +26,50 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
     vis.add_geometry(ground_plane)
     vis.add_geometry(pcd)
 
+    # visualize the bounding boxes
+    bbox_objs = []
+    label_objs = []
+    if show_bbox:
+        bboxes = load_global_bboxes(base_folder, initial_timestamp)
+        for obj in bboxes:
+            box = create_bbox_o3d(obj)
+            bbox_objs.append(box)
+            vis.add_geometry(box)
+            label = create_bbox_label(obj)
+            label_objs.append(label)
+            vis.add_geometry(label)
+
     while True:
         vis.poll_events()
         vis.update_renderer()
-        if conn.poll():  # Check if there's a new timestamp
-            new_ts, use_height_color, min_z, max_z = conn.recv()
+
+        if conn.poll():
+            new_ts, use_height_color, show_bbox, min_z, max_z = conn.recv()
             pcd_new = load_and_prepare_pcd(new_ts, use_height_color, min_z, max_z)
             pcd.points = pcd_new.points
             pcd.colors = pcd_new.colors
             vis.update_geometry(pcd)
+
+            # Remove old bboxes
+            for box in bbox_objs:
+                vis.remove_geometry(box)
+            bbox_objs.clear()
+            # Remove old labels
+            for label in label_objs:
+                vis.remove_geometry(label)
+            label_objs.clear()
+
+            # Add new bboxes
+            if show_bbox:
+                bboxes = load_global_bboxes(base_folder, new_ts)
+                for obj in bboxes:
+                    box = create_bbox_o3d(obj)
+                    bbox_objs.append(box)
+                    vis.add_geometry(box)
+                    label = create_bbox_label(obj)
+                    label_objs.append(label)
+                    vis.add_geometry(label)
+
 
 
 class MainWindow(QWidget):
@@ -52,6 +87,7 @@ class MainWindow(QWidget):
         self.pcd_conn = None
         self.pcd_process = None
         self.use_height_color = True
+        self.show_bbox = True
         self.min_z = 0.4
         self.max_z = 4.0
 
@@ -103,6 +139,11 @@ class MainWindow(QWidget):
         self.height_color_cb.stateChanged.connect(self.toggle_height_color)
         z_control_layout.addWidget(self.height_color_cb)
 
+        self.show_bbox_cb = QCheckBox("Show Bounding Boxes")
+        self.show_bbox_cb.setChecked(True)
+        self.show_bbox_cb.stateChanged.connect(self.toggle_show_bbox)
+        z_control_layout.addWidget(self.show_bbox_cb)
+
         z_control_layout.addWidget(QLabel("Min Z:"))
         self.min_z_input = QLineEdit(str(self.min_z))
         self.min_z_input.setFixedWidth(60)
@@ -145,6 +186,10 @@ class MainWindow(QWidget):
     def toggle_height_color(self, state):
         self.use_height_color = state == Qt.Checked
         self.visualize()  # Optional: auto refresh when toggled
+    
+    def toggle_show_bbox(self, state):
+        self.show_bbox = state == Qt.Checked
+        self.visualize()
 
     def update_z_range(self):
         try:
@@ -179,12 +224,13 @@ class MainWindow(QWidget):
             self.pcd_process = Process(target=visualize_pointcloud_worker,
                                     args=(self.base_folder, self.current_timestamp,
                                             self.selected_nodes, self.node_colors,
-                                            self.use_height_color, self.min_z, self.max_z, child_conn))
+                                            self.use_height_color, self.show_bbox, self.min_z, self.max_z, child_conn))
             self.pcd_process.start()
         else:
             # Send new timestamp to existing process
             if self.pcd_conn:
-                self.pcd_conn.send((self.current_timestamp, self.use_height_color, self.min_z, self.max_z))
+                self.pcd_conn.send(
+                    (self.current_timestamp, self.use_height_color, self.show_bbox, self.min_z, self.max_z))
 
         self.visualize_images()
 
@@ -219,6 +265,13 @@ class MainWindow(QWidget):
 
             img_proj = project_points_to_image(
                 points, intrinsic, extrinsic, img.copy(), colors, alpha)
+            
+            if self.show_bbox:
+                global_bboxes = load_global_bboxes(
+                    self.base_folder, self.current_timestamp)
+                for bbox in global_bboxes:
+                    img_proj = draw_projected_bbox(
+                        img_proj, intrinsic, extrinsic, bbox, bbox['id'], bbox['label'])
             
             return img_proj  # raw image only
 

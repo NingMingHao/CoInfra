@@ -6,6 +6,14 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 
 
+def load_global_bboxes(base_folder, timestamp):
+    bbox_path = os.path.join(base_folder, "GroundTruth",
+                             timestamp, "global.yaml")
+    if not os.path.exists(bbox_path):
+        return []
+    with open(bbox_path, 'r') as f:
+        return yaml.safe_load(f)
+
 def load_lidar_npys(base, timestamp, selected_nodes):
     lidar_path = os.path.join(base, 'PcImage', timestamp, 'lidar')
     lidar_data = {}
@@ -151,3 +159,123 @@ def create_xy_ground_plane(width=100, height=100, resolution=1.0, center=(0, 0))
     mesh.paint_uniform_color([0.5, 0.5, 0.5])
     mesh.compute_vertex_normals()
     return mesh
+
+
+def create_bbox_o3d(obj):
+    # Get dimensions and transform
+    l, w, h = obj['dimensions']['length'], obj['dimensions']['width'], obj['dimensions']['height']
+    x, y, z = obj['position']['x'], obj['position']['y'], obj['position']['z']
+    heading = obj['heading']
+
+    # Define box geometry
+    box = o3d.geometry.OrientedBoundingBox()
+    box.center = np.array([x, y, z])
+    box.extent = np.array([l, w, h])
+    R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
+                                                                             0, 0, heading])
+    box.R = R
+    box.color = [1, 0, 0] if obj['label'] == 'Person' else [0, 1, 0]
+
+    return box
+
+
+# def create_bbox_o3d(obj):
+#     import itertools
+
+#     # Assign colors based on label
+#     label_colors = {
+#         "Person": [1, 0, 0],     # Red
+#         "Car": [0, 1, 0],        # Green
+#         "Bus": [0, 0, 1],        # Blue
+#         "Truck": [1, 1, 0],      # Yellow
+#         "Bicycle": [1, 0, 1],    # Magenta
+#     }
+#     color = label_colors.get(obj["label"], [0.5, 0.5, 0.5])  # Default: gray
+
+#     # Dimensions and position
+#     l, w, h = obj['dimensions']['length'], obj['dimensions']['width'], obj['dimensions']['height']
+#     x, y, z = obj['position']['x'], obj['position']['y'], obj['position']['z']
+#     heading = obj['heading']
+
+#     # Box corners in local frame
+#     dx, dy, dz = l / 2, w / 2, h / 2
+#     corners = np.array([
+#         [dx,  dy,  dz], [dx, -dy,  dz], [-dx, -dy,  dz], [-dx,  dy,  dz],
+#         [dx,  dy, -dz], [dx, -dy, -dz], [-dx, -dy, -dz], [-dx,  dy, -dz],
+#     ])
+
+#     # Apply heading rotation and translation
+#     R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
+#                                                                              0, 0, heading])
+#     corners = (R @ corners.T).T + np.array([x, y, z])
+
+#     # Define line connections
+#     lines = [
+#         [0, 1], [1, 2], [2, 3], [3, 0],  # Top face
+#         [4, 5], [5, 6], [6, 7], [7, 4],  # Bottom face
+#         [0, 4], [1, 5], [2, 6], [3, 7],  # Vertical edges
+#     ]
+
+#     # Create LineSet object
+#     line_set = o3d.geometry.LineSet(
+#         points=o3d.utility.Vector3dVector(corners),
+#         lines=o3d.utility.Vector2iVector(lines)
+#     )
+#     line_set.colors = o3d.utility.Vector3dVector([color for _ in lines])
+#     return line_set
+
+def create_bbox_label(obj):
+    x, y, z = obj['position']['x'], obj['position']['y'], obj['position']['z'] + 1.0
+    text = f"{obj['id']}:{obj['label']}"
+    text_3d = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.4)
+    text_3d.translate([x, y, z])
+    return text_3d
+
+
+def draw_projected_bbox(image, intrinsic, extrinsic, bbox, obj_id, label):
+    l, w, h = bbox['dimensions']['length'], bbox['dimensions']['width'], bbox['dimensions']['height']
+    x, y, z = bbox['position']['x'], bbox['position']['y'], bbox['position']['z']
+    heading = bbox['heading']
+
+    # Check visibility of center in camera frame
+    center_world = np.array([x, y, z, 1.0])
+    center_cam = extrinsic @ center_world
+    if not (3 < center_cam[2] < 60):
+        return image  # Skip if not in visible range
+
+    # 3D bounding box corners in local
+    dx = l / 2
+    dy = w / 2
+    dz = h / 2
+    corners = np.array([
+        [dx, dy, dz], [dx, -dy, dz], [-dx, -dy, dz], [-dx, dy, dz],
+        [dx, dy, -dz], [dx, -dy, -dz], [-dx, -dy, -dz], [-dx, dy, -dz],
+    ])
+
+    R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_axis_angle([
+                                                                             0, 0, heading])
+    corners = (R @ corners.T).T + np.array([x, y, z])
+
+    # Project
+    points_hom = np.hstack([corners, np.ones((8, 1))])
+    points_cam = (extrinsic @ points_hom.T)[:3, :]
+    proj = (intrinsic @ points_cam).T
+    proj[:, 0] /= proj[:, 2]
+    proj[:, 1] /= proj[:, 2]
+    pts_2d = proj[:, :2].astype(np.int32)
+
+    # Draw box lines
+    lines = [(0, 1), (1, 2), (2, 3), (3, 0),
+             (4, 5), (5, 6), (6, 7), (7, 4),
+             (0, 4), (1, 5), (2, 6), (3, 7)]
+    for i, j in lines:
+        cv2.line(image, tuple(pts_2d[i]), tuple(pts_2d[j]), (0, 255, 0), 2)
+
+    # Draw surrounding 2D bbox and label
+    x_min, y_min = np.min(pts_2d[:, 0]), np.min(pts_2d[:, 1])
+    x_max, y_max = np.max(pts_2d[:, 0]), np.max(pts_2d[:, 1])
+    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
+    cv2.putText(image, f"{obj_id}:{label}", (x_min, y_min - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+    return image
