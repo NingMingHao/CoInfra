@@ -58,3 +58,13 @@ test/
 ---
 
 
+
+## Installation
+
+### Prerequisites
+
+Ensure you have Python 3.8+ installed. Install the required packages using pip:
+
+```bash
+pip3 install -r requirements.txt
+```

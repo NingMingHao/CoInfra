@@ -154,7 +154,7 @@ class CoInfraVisualizer:
             arrow_end = [cx + arrow_len *
                          np.cos(heading), cy + arrow_len * np.sin(heading)]
             fig.add_trace(go.Scatter(x=[cx, arrow_end[0]], y=[cy, arrow_end[1]], mode='lines+markers', line=dict(
-                color=color, width=2, dash='dash'), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
+                color=color, width=2), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
 
     def get_available_folders(self, root_dir):
         folders = natsorted([f for f in glob.glob(
@@ -197,7 +197,7 @@ class CoInfraVisualizer:
                     dcc.RadioItems(id='base-layer', options=[
                         {'label': 'HD Map', 'value': 'hdmap'},
                         {'label': 'ROI Map', 'value': 'roi'}
-                    ], value='roi'),
+                    ], value='hdmap'),
 
                     html.Label("Mode:"),
                     dcc.RadioItems(id='view-mode', options=[
@@ -357,7 +357,7 @@ class CoInfraVisualizer:
             fig.update_layout(height=800, width=800, margin=dict(
                 l=10, r=10, t=40, b=40), showlegend=False, paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)')
-            return fig, len(self.frame_list)-1, {i: f if i % 10 == 0 else '' for i, f in enumerate(self.frame_list)}, [{'label': nid, 'value': nid} for nid in self.INTEREST_NODES]
+            return fig, len(self.frame_list)-1, {i: f if i % max(10,(len(self.frame_list)//10)) == 0 else '' for i, f in enumerate(self.frame_list)}, [{'label': nid, 'value': nid} for nid in self.INTEREST_NODES]
 
     def run(self):
         self.app.run(debug=False)
