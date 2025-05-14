@@ -143,14 +143,12 @@ class CoInfraVisualizer:
                 color=color, width=2, dash='dash'), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
 
     def get_available_folders(self, root_dir):
-        folders = [f for f in glob.glob(os.path.join(root_dir, '*')) if os.path.isdir(f)]
-        # print(f"Available folders: {folders}")
+        folders = [f for f in glob.glob(
+            os.path.join(root_dir, '*')) if os.path.isdir(f)]
         return [{'label': os.path.basename(f), 'value': f} for f in folders]
-    
+
     def render_base_image(self, base_layer, view_mode, enabled_nodes):
-        # Prevent crash before folder is loaded
         if self.img_size is None or self.scale is None:
-            print("[Warning] render_base_image called before folder loaded.")
             return np.zeros((1, 1, 4), dtype=np.uint8)
         if base_layer == 'hdmap':
             return self.cached_hd_base
@@ -174,7 +172,7 @@ class CoInfraVisualizer:
                 ], style={'width': '85%', 'display': 'inline-block', 'verticalAlign': 'top', 'paddingRight': '10px'}),
                 html.Div([
                     html.Button('Play', id='play-button', n_clicks=0),
-                    dcc.Interval(id='play-interval', interval=200,
+                    dcc.Interval(id='play-interval', interval=90,
                                  n_intervals=0, disabled=True)
                 ], style={'display': 'inline-block', 'verticalAlign': 'top', 'paddingTop': '30px'})
             ], style={'paddingBottom': '20px'}),
@@ -204,8 +202,35 @@ class CoInfraVisualizer:
                 ], style={'width': '30%', 'display': 'inline-block', 'verticalAlign': 'top'}),
 
                 html.Div([
-                    dcc.Graph(id='base-image'),
-                    dcc.Graph(id='bbox-overlay')
+                    html.Div([
+                        dcc.Graph(
+                            id='base-image',
+                            config={'displayModeBar': False},
+                            style={
+                                'position': 'absolute',
+                                'zIndex': 0,
+                                'height': '800px',
+                                'width': '800px'
+                            }
+                        ),
+                        dcc.Graph(
+                            id='bbox-overlay',
+                            config={'displayModeBar': False},
+                            style={
+                                'position': 'absolute',
+                                'zIndex': 1,
+                                'height': '800px',
+                                'width': '800px',
+                                'backgroundColor': 'rgba(0,0,0,0)',
+                                'paper_bgcolor': 'rgba(0,0,0,0)',
+                                'plot_bgcolor': 'rgba(0,0,0,0)'
+                            }
+                        )
+                    ], style={
+                        'position': 'relative',
+                        'width': '800px',
+                        'height': '800px'
+                    })
                 ], style={'width': '69%', 'display': 'inline-block'})
             ])
         ])
@@ -294,11 +319,12 @@ class CoInfraVisualizer:
                         fig, obj_list, color=color, node_id=nid, global_mode=False, transform=tf)
 
             fig.update_xaxes(
-                range=[self.min_x, self.min_x + self.img_size/self.scale], constrain='domain')
+                range=[self.min_x, self.min_x + self.img_size/self.scale], constrain='domain', showgrid=False)
             fig.update_yaxes(range=[self.max_y - self.img_size/self.scale,
-                             self.max_y], scaleanchor='x', constrain='domain')
+                             self.max_y], scaleanchor='x', constrain='domain', showgrid=False)
             fig.update_layout(height=800, width=800, margin=dict(
-                l=10, r=10, t=40, b=40), showlegend=False)
+                l=10, r=10, t=40, b=40), showlegend=False, paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)')
             return fig, len(self.frame_list)-1, {i: f if i % 10 == 0 else '' for i, f in enumerate(self.frame_list)}, [{'label': nid, 'value': nid} for nid in self.INTEREST_NODES]
 
     def run(self):
