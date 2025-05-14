@@ -7,6 +7,10 @@ from dash import dcc, html, Input, Output, State
 import plotly.graph_objects as go
 import glob
 import copy
+from natsort import natsorted
+
+BASE_FOLDER_PATH = os.path.expanduser(
+    '~/Documents/Gits/OutdoorSensorNodes/CoInfra/example_data/2025_02_12_16_37_heavysnow')
 
 
 class CoInfraVisualizer:
@@ -31,6 +35,16 @@ class CoInfraVisualizer:
             "4": (255, 0, 0), "5": (0, 255, 0), "6": (0, 0, 255), "7": (255, 255, 0),
             "8": (0, 255, 255), "9": (255, 0, 255), "10": (128, 128, 0), "11": (0, 128, 128), "global": (128, 0, 128)
         }
+
+        folders = self.get_available_folders(BASE_FOLDER_PATH)
+        self.default_options = folders
+        if folders:
+            default_folder = folders[0]['value']
+            self.load_data_from_folder(default_folder)
+            self.default_folder = default_folder
+        else:
+            self.default_folder = None
+
 
         self.setup_layout()
 
@@ -84,7 +98,7 @@ class CoInfraVisualizer:
                     tf_info['ground_to_global'])
 
         gt_folder = os.path.join(folder, "GroundTruth")
-        self.frame_list = sorted([f for f in os.listdir(
+        self.frame_list = natsorted([f for f in os.listdir(
             gt_folder) if os.path.isdir(os.path.join(gt_folder, f))])
         self.cached_obstacles = {
             frame: {
@@ -143,8 +157,8 @@ class CoInfraVisualizer:
                 color=color, width=2, dash='dash'), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
 
     def get_available_folders(self, root_dir):
-        folders = [f for f in glob.glob(
-            os.path.join(root_dir, '*')) if os.path.isdir(f)]
+        folders = natsorted([f for f in glob.glob(
+            os.path.join(root_dir, '*')) if os.path.isdir(f)])
         return [{'label': os.path.basename(f), 'value': f} for f in folders]
 
     def render_base_image(self, base_layer, view_mode, enabled_nodes):
@@ -196,8 +210,12 @@ class CoInfraVisualizer:
                                   inline=True, value=['global']),
 
                     html.Label("Select Folder:"),
-                    dcc.Dropdown(id='folder-path',
-                                 placeholder='Select a dataset folder'),
+                    dcc.Dropdown(
+                        id='folder-path',
+                        placeholder='Select a dataset folder',
+                        options=self.default_options,
+                        value=self.default_folder,
+                    ),
                     html.Button('Load Folder', id='load-folder', n_clicks=0)
                 ], style={'width': '30%', 'display': 'inline-block', 'verticalAlign': 'top'}),
 
@@ -236,13 +254,35 @@ class CoInfraVisualizer:
         ])
 
         @self.app.callback(
-            Output('folder-path', 'options'),
-            Input('load-folder', 'n_clicks'),
+            Output('frame-slider', 'value'),
+            [Input('play-interval', 'n_intervals'),
+             Input('load-folder', 'n_clicks')],
+            [State('frame-slider', 'value'),
+             State('folder-path', 'value')],
             prevent_initial_call=True
         )
-        def update_dropdown(_):
-            return self.get_available_folders(os.path.expanduser('~/Documents/Gits/OutdoorSensorNodes/CoInfra/example_data'))
+        def update_frame_slider(n_intervals, n_clicks, current_frame, selected_folder):
+            ctx = dash.callback_context
 
+            if not ctx.triggered:
+                return dash.no_update
+
+            triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+            if triggered_id == 'load-folder':
+                if selected_folder and os.path.exists(selected_folder) and selected_folder != self.TEST_FOLDER:
+                    self.load_data_from_folder(selected_folder)
+                    return 0  # Reset to frame 0
+                else:
+                    return dash.no_update
+
+            elif triggered_id == 'play-interval':
+                if not self.frame_list:
+                    return 0
+                return (current_frame + 1) % len(self.frame_list)
+
+            return dash.no_update
+        
         @self.app.callback(
             Output('play-interval', 'disabled'),
             Input('play-button', 'n_clicks'),
@@ -252,24 +292,14 @@ class CoInfraVisualizer:
             return n % 2 == 0
 
         @self.app.callback(
-            Output('frame-slider', 'value'),
-            Input('play-interval', 'n_intervals'),
-            State('frame-slider', 'value')
-        )
-        def advance_frame(_, current):
-            if not self.frame_list:
-                return 0
-            return (current + 1) % len(self.frame_list)
-
-        @self.app.callback(
             Output('base-image', 'figure'),
-            [Input('base-layer', 'value'),
+            [Input('load-folder', 'n_clicks')], 
+             Input('base-layer', 'value'),
              Input('view-mode', 'value'),
              Input('node-selection', 'value'),
-             Input('load-folder', 'n_clicks')],
             [State('folder-path', 'value')]
         )
-        def update_base(base_layer, view_mode, enabled_nodes, _, folder):
+        def update_base(n_clicks, base_layer, view_mode, enabled_nodes, folder):
             # Load data if a new valid folder is selected
             if folder and os.path.exists(folder) and folder != self.TEST_FOLDER:
                 self.load_data_from_folder(folder)
@@ -298,9 +328,11 @@ class CoInfraVisualizer:
              Output('node-selection', 'options')],
             [Input('frame-slider', 'value'),
              Input('view-mode', 'value'),
-             Input('node-selection', 'value')]
+             Input('node-selection', 'value'),
+             Input('load-folder', 'n_clicks')],
+            [State('folder-path', 'value')]
         )
-        def update_overlay(frame_idx, view_mode, enabled_nodes):
+        def update_overlay(frame_idx, view_mode, enabled_nodes, n_clicks, folder):
             if not self.frame_list:
                 return go.Figure(), 0, {}, []
 
