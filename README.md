@@ -33,9 +33,10 @@ train/
 │   │
 │   ├── GroundTruth/
 │   │   └── timestamp (e.g., 1742850299.2/)
-│   │       ├── {node_id}.yaml     # object ID, class, position, heading, and dimensions in local ground frame
+│   │       ├── {node_id}_roi.yaml     # object ID, class, position, heading, and dimensions in local ground frame in ROI
 │   │       ├── ...
-│   │       └── global.yaml        # object ID, class, position, heading, and dimensions in global frame
+│   │       ├── global_roi.yaml    # object ID, class, position, heading, and dimensions in global frame in global ROI
+│   │       └── global.yaml        # object ID, class, position, heading, and dimensions in global frame (raw data from human labeling)
 │   │
 │   └── HDmap/
 │       ├── transformation.yaml   # pixel <-> global transformation
