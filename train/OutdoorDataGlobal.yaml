@@ -1,0 +1,12 @@
+path: /media/minghao/Data2TB/OutdoorDataYOLO/ultralytics_dataset_global # dataset root dir
+train: images/train/  # train images (relative to 'path')
+val: images/val/
+test: images/test/
+
+# Classes
+names:
+  0: Car
+  1: Person
+  2: Truck
+  3: Bus
+  4: Bicycle

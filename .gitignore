@@ -1,5 +1,10 @@
 example_data/
+example_data_no_pcimage/
 **.pyc
 __pycache__/
 *.DS_Store
 test_code/
+late_fusion/
+early_fusion/
+yolo11n.pt
+yolo11s-obb.pt
