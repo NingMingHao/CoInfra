@@ -14,6 +14,10 @@ from natsort import natsorted
 BASE_DIR = "/home/minghao/Documents/Gits/OutdoorSensorNodes/CoInfra/example_data"
 OUTPUT_DIR = "/media/minghao/Data2TB/OutdoorDataYOLO/ultralytics_dataset_global"
 
+USE_HDMAP = True
+if USE_HDMAP:
+    OUTPUT_DIR += "_hdmap"
+
 TRANS_YAML_PATH = os.path.join(BASE_DIR, "transformation.yaml")
 with open(TRANS_YAML_PATH, 'r') as f:
     transformation_info = yaml.safe_load(f)
@@ -35,6 +39,7 @@ SCENARIO_FOLDER_LIST = [
 
 cached_transform_dict = {}
 cached_roi_dict = {}
+cached_hdmap_dict = {}
 
 
 def to_image_coords(x, y):
@@ -43,12 +48,16 @@ def to_image_coords(x, y):
     return img_x, img_y
 
 
-def render_bev(points, roi_mask):
+def render_bev(points, roi, hdmap):
     min_z = 0.5
     max_z = 4.0
     # first filter points by z
     points = points[(points[:, 2] >= min_z) & (points[:, 2] <= max_z)]
-    canvas = np.zeros((IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8)
+    if hdmap is not None and USE_HDMAP:
+        canvas = hdmap.copy()
+    else:
+        canvas = np.zeros((IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8)
+
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     img_x, img_y = to_image_coords(x, y)
 
@@ -56,9 +65,14 @@ def render_bev(points, roi_mask):
         img_y >= 0) & (img_y < IMG_SIZE)
     img_x, img_y, z = img_x[mask], img_y[mask], z[mask]
 
-    if roi_mask is not None:
-        roi_mask_vals = roi_mask[img_y, img_x] > 0
-        img_x, img_y, z = img_x[roi_mask_vals], img_y[roi_mask_vals], z[roi_mask_vals]
+    if hdmap is not None and USE_HDMAP:
+        # filter points by hdmap
+        hdmap_roi_binary = np.any(hdmap != 255, axis=-1)
+        hdmap_mask = hdmap_roi_binary[img_y, img_x]
+        img_x, img_y, z = img_x[hdmap_mask], img_y[hdmap_mask], z[hdmap_mask]
+    else:    
+        roi_mask = roi[img_y, img_x] > 0
+        img_x, img_y, z = img_x[roi_mask], img_y[roi_mask], z[roi_mask]
 
     z_norm = (z - min_z) / (max_z - min_z)
     colors = (cm.rainbow(z_norm)[:, :3] * 255).astype(np.uint8)
@@ -167,6 +181,19 @@ def process_split(split_name, unit_paths):
                 cached_roi_dict[roi_key] = cv2.imread(
                     roi_path, cv2.IMREAD_GRAYSCALE)
         roi = cached_roi_dict[roi_key]
+
+        # find the hdmap
+        if USE_HDMAP:
+            hdmap_key = f"{scenario}"
+            if hdmap_key not in cached_hdmap_dict:
+                hdmap_path = os.path.join(
+                    BASE_DIR, scenario, slice_name, "HDmap", f"hdmap.png")
+                if os.path.exists(hdmap_path):
+                    cached_hdmap_dict[hdmap_key] = cv2.imread(
+                        hdmap_path)
+        else:
+            cached_hdmap_dict[hdmap_key] = None
+        hdmap = cached_hdmap_dict[hdmap_key]
         
         all_points = []
         for node_id in NODE_IDS:
@@ -192,7 +219,7 @@ def process_split(split_name, unit_paths):
             continue
 
         all_points = np.vstack(all_points)
-        bev_img = render_bev(all_points, roi)
+        bev_img = render_bev(all_points, roi, hdmap)
 
         out_img_dir = os.path.join(
             OUTPUT_DIR, "images", split_name, scenario, slice_name)
