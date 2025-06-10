@@ -29,6 +29,11 @@ def geo_to_open3d_extrinsic(x, y, z, pitch, yaw, roll):
     rot_x_pos90 = R.from_euler('x', 90, degrees=True).as_matrix()
     open3d_rot = enu_rot @ rot_x_pos90  # ENU to Open3D
 
+    # Set roll to zero to match google map view
+    angle_xyz = R.from_matrix(open3d_rot).as_euler('xyz', degrees=True)
+    open3d_rot = R.from_euler(
+        'xyz', [angle_xyz[0], 0, angle_xyz[2]], degrees=True).as_matrix()
+
     # 3. Build camera-to-world matrix (Google convention)
     cam_to_world = np.eye(4)
     cam_to_world[:3, :3] = open3d_rot
@@ -57,15 +62,26 @@ def convert_extrinsic_to_standard(open3d_extrinsic):
     corrected_matrix = np.eye(4)
     corrected_matrix[:3, :3] = corrected_rot
     corrected_matrix[:3, 3] = cam_to_world[:3, 3]
-    return corrected_matrix
 
-def open3d_extrinsic_to_geo(extrinsic):
-    extrinsic = convert_extrinsic_to_standard(extrinsic)
-    rot = R.from_matrix(extrinsic[:3, :3])
+    rot = R.from_matrix(corrected_matrix[:3, :3])
     # roll, pitch, yaw = rot.as_euler('xyz', degrees=True)
     yaw, pitch, roll = rot.as_euler('zyx', degrees=True)
-    x, y, z = extrinsic[:3, 3]
-    return x,y,z,pitch, yaw, roll
+    x, y, z = corrected_matrix[:3, 3]
+
+    return x, y, z, pitch, yaw, roll
+
+
+def print_all_euler_conventions(matrix):
+    from scipy.spatial.transform import Rotation as R
+    rot = R.from_matrix(matrix[:3, :3])
+    orders = ['zyx', 'xyz', 'yxz', 'zxy']
+    for order in orders:
+        try:
+            angles = rot.as_euler(order, degrees=True)
+            print(f"{order}: {angles}")
+        except Exception as e:
+            print(f"{order}: ERROR {e}")
+
 
 def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, show_bbox, min_z, max_z, conn):
     def load_and_prepare_pcd(ts, use_height_color, min_z, max_z):
@@ -80,7 +96,7 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
     vis.create_window(window_name='Pointcloud')
     # set background color to black
     vis.get_render_option().background_color = np.array([0, 0, 0])
-    vis.get_render_option().point_size = 2
+    vis.get_render_option().point_size = 1
 
     vis.add_geometry(ground_plane)
     vis.add_geometry(pcd)
@@ -320,7 +336,7 @@ class MainWindow(QWidget):
             if self.pcd_conn.poll(2):  # Wait for reply
                 extrinsic = self.pcd_conn.recv()
                 # Convert extrinsic to geo
-                x, y, z, pitch, yaw, roll = open3d_extrinsic_to_geo(extrinsic)
+                x, y, z, pitch, yaw, roll = convert_extrinsic_to_standard(extrinsic)
                 x += self.ref_easting_
                 y += self.ref_northing_
                 lat, lon = utm.to_latlon(x, y, self.utm_zone, self.utm_letter)
