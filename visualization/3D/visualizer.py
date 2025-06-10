@@ -10,7 +10,62 @@ from PyQt5.QtWidgets import (QWidget, QCheckBox, QPushButton, QVBoxLayout, QLine
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from utils import *
+import utm
+from scipy.spatial.transform import Rotation as R
 
+# ---------- Helpers for conversion ----------
+
+
+def geo_to_open3d_extrinsic(x, y, z, pitch, yaw, roll):
+    """
+    Converts geo/Google (ENU, Z-up, yaw/pitch/roll) pose to Open3D extrinsic (world-to-cam).
+    Reverse of convert_extrinsic_to_standard.
+    """
+
+    # 1. Start with Google/ENU orientation (yaw, pitch, roll) as 'zyx'
+    enu_rot = R.from_euler('zyx', [yaw, pitch, roll], degrees=True).as_matrix()
+
+    # 2. Apply +90° rotation about X to map ENU (Z-up) to Open3D (Z-forward)
+    rot_x_pos90 = R.from_euler('x', 90, degrees=True).as_matrix()
+    open3d_rot = enu_rot @ rot_x_pos90  # ENU to Open3D
+
+    # 3. Build camera-to-world matrix (Google convention)
+    cam_to_world = np.eye(4)
+    cam_to_world[:3, :3] = open3d_rot
+    cam_to_world[:3, 3] = [x, y, z]
+
+    # 4. Open3D extrinsic is world-to-cam, so invert
+    world_to_cam = np.linalg.inv(cam_to_world)
+    return world_to_cam
+
+
+def convert_extrinsic_to_standard(open3d_extrinsic):
+    """
+    Convert Open3D extrinsic (world-to-cam) to standard cam-to-world (ENU/Z-up, Google convention).
+    Handles the case where Open3D Z is down, Google Z is up.
+    """
+
+    # 1. Invert to get cam-to-world
+    cam_to_world = np.linalg.inv(open3d_extrinsic)
+
+    # 2. Apply rotation to convert Open3D (Z forward) to ENU/Google (Z up)
+    # This is typically a -90 deg rotation about X (convert Z forward -> Z up)
+    # [ [1, 0, 0], [0, 0, -1], [0, 1, 0] ] is the rot. matrix for -90 deg about X
+    rot_x_neg90 = R.from_euler('x', -90, degrees=True).as_matrix()
+    corrected_rot = cam_to_world[:3, :3] @ rot_x_neg90
+
+    corrected_matrix = np.eye(4)
+    corrected_matrix[:3, :3] = corrected_rot
+    corrected_matrix[:3, 3] = cam_to_world[:3, 3]
+    return corrected_matrix
+
+def open3d_extrinsic_to_geo(extrinsic):
+    extrinsic = convert_extrinsic_to_standard(extrinsic)
+    rot = R.from_matrix(extrinsic[:3, :3])
+    # roll, pitch, yaw = rot.as_euler('xyz', degrees=True)
+    yaw, pitch, roll = rot.as_euler('zyx', degrees=True)
+    x, y, z = extrinsic[:3, 3]
+    return x,y,z,pitch, yaw, roll
 
 def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, node_colors, use_height_color, show_bbox, min_z, max_z, conn):
     def load_and_prepare_pcd(ts, use_height_color, min_z, max_z):
@@ -48,11 +103,36 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
         vis.update_renderer()
 
         if conn.poll():
+            msg = conn.recv()
+            # --- Handle camera control messages
+            if isinstance(msg, tuple):
+                if len(msg) == 2 and isinstance(msg[0], str):
+                    cmd, arg = msg
+                    if cmd == 'set_camera':
+                        # arg is the extrinsic (4x4 numpy array)
+                        view_ctrl = vis.get_view_control()
+                        params = view_ctrl.convert_to_pinhole_camera_parameters()
+                        params.extrinsic = arg
+                        view_ctrl.convert_from_pinhole_camera_parameters(
+                            params)
+                        continue
+                    elif cmd == 'get_camera':
+                        view_ctrl = vis.get_view_control()
+                        params = view_ctrl.convert_to_pinhole_camera_parameters()
+                        conn.send(params.extrinsic)
+                        continue
+            # --- Handle the usual point cloud update message (backward compatible)
+            try:
+                new_ts, use_height_color, show_bbox, min_z, max_z = msg
+            except Exception as e:
+                print("Unknown message format received by worker:", msg)
+                continue
+
             view_ctrl = vis.get_view_control()
             cam_params = view_ctrl.convert_to_pinhole_camera_parameters()
 
-            new_ts, use_height_color, show_bbox, min_z, max_z = conn.recv()
-            pcd_new = load_and_prepare_pcd(new_ts, use_height_color, min_z, max_z)
+            pcd_new = load_and_prepare_pcd(
+                new_ts, use_height_color, min_z, max_z)
             pcd.points = pcd_new.points
             pcd.colors = pcd_new.colors
             vis.update_geometry(pcd)
@@ -61,10 +141,6 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
             for box in bbox_objs:
                 vis.remove_geometry(box)
             bbox_objs.clear()
-            # # Remove old labels
-            # for label in label_objs:
-            #     vis.remove_geometry(label)
-            # label_objs.clear()
 
             # Add new bboxes
             if show_bbox:
@@ -73,9 +149,6 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
                     box = create_bbox_o3d(obj)
                     bbox_objs.append(box)
                     vis.add_geometry(box)
-                    # label = create_bbox_label(obj)
-                    # label_objs.append(label)
-                    # vis.add_geometry(label)
 
             # Restore previous camera
             view_ctrl.convert_from_pinhole_camera_parameters(cam_params)
@@ -105,6 +178,18 @@ class MainWindow(QWidget):
         self.detailed_image = None  # Holds the currently displayed detailed image
         self.detailed_window_open = False
         self.detailed_view_source = None  # (node_id, 'left' or 'right')
+
+        self.ref_easting_ = 537132.0
+        self.ref_northing_ = 4813391.0
+        self.ref_altitude_ = 0.0  # Reference altitude for the camera
+        self.camera_lat = 43.4762156
+        self.camera_lon = -80.5483912
+        self.camera_alt = 71.0
+        self.camera_pitch = 35.0
+        self.camera_yaw = 10.69
+        self.camera_roll = 0.0
+        self.utm_zone = 17      # Set your UTM zone and letter
+        self.utm_letter = 'T'   # as appropriate for your data
 
         self.setup_ui()
 
@@ -176,7 +261,83 @@ class MainWindow(QWidget):
 
         layout.addLayout(z_control_layout)
 
+        # Camera View Controls
+        cam_control_layout = QHBoxLayout()
+        cam_control_layout.addWidget(QLabel("Lat:"))
+        self.lat_input = QLineEdit(str(self.camera_lat))
+        cam_control_layout.addWidget(self.lat_input)
+        cam_control_layout.addWidget(QLabel("Lon:"))
+        self.lon_input = QLineEdit(str(self.camera_lon))
+        cam_control_layout.addWidget(self.lon_input)
+        cam_control_layout.addWidget(QLabel("Alt (m):"))
+        self.alt_input = QLineEdit(str(self.camera_alt))
+        cam_control_layout.addWidget(self.alt_input)
+        cam_control_layout.addWidget(QLabel("Pitch (°):"))
+        self.pitch_input = QLineEdit(str(self.camera_pitch))
+        cam_control_layout.addWidget(self.pitch_input)
+        cam_control_layout.addWidget(QLabel("Yaw (°):"))
+        self.yaw_input = QLineEdit(str(self.camera_yaw))
+        cam_control_layout.addWidget(self.yaw_input)
+        cam_control_layout.addWidget(QLabel("Roll (°):"))
+        self.roll_input = QLineEdit(str(self.camera_roll))
+        cam_control_layout.addWidget(self.roll_input)
+
+        self.set_cam_btn = QPushButton("Set Camera View")
+        self.set_cam_btn.clicked.connect(self.set_camera_view_from_ui)
+        cam_control_layout.addWidget(self.set_cam_btn)
+
+        self.get_cam_btn = QPushButton("Read Camera View")
+        self.get_cam_btn.clicked.connect(self.get_camera_view_and_print)
+        cam_control_layout.addWidget(self.get_cam_btn)
+
+        layout.addLayout(cam_control_layout)
+
         self.setLayout(layout)
+
+    def set_camera_view_from_ui(self):
+        # Parse values from UI
+        lat = float(self.lat_input.text())
+        lon = float(self.lon_input.text())
+        alt = float(self.alt_input.text())
+        pitch = float(self.pitch_input.text())
+        yaw = float(self.yaw_input.text())
+        roll = float(self.roll_input.text())
+        # Convert to local coordinates
+        x, y, zone, letter = utm.from_latlon(lat, lon)
+        x -= self.ref_easting_
+        y -= self.ref_northing_
+        z = alt - self.ref_altitude_  # or just alt, adjust as needed
+
+        extrinsic = geo_to_open3d_extrinsic(x, y, z, pitch, yaw, roll)
+        # Send command to visualizer process via Pipe
+        if self.pcd_conn is not None:
+            self.pcd_conn.send(('set_camera', extrinsic))
+
+    def get_camera_view_and_print(self):
+        # Request camera from worker and wait for reply
+        if self.pcd_conn is not None:
+            self.pcd_conn.send(('get_camera', None))
+            if self.pcd_conn.poll(2):  # Wait for reply
+                extrinsic = self.pcd_conn.recv()
+                # Convert extrinsic to geo
+                x, y, z, pitch, yaw, roll = open3d_extrinsic_to_geo(extrinsic)
+                x += self.ref_easting_
+                y += self.ref_northing_
+                lat, lon = utm.to_latlon(x, y, self.utm_zone, self.utm_letter)
+                tmp_pitch = 35
+                tmp_roll = roll - 90  # Adjust roll to match your convention
+                cam_str = f"@{lat:.7f},{lon:.7f},{z + self.ref_altitude_:.2f}a,{tmp_pitch:.2f}y,{yaw:.2f}h,{tmp_roll:.2f}t"
+                print(cam_str)
+                # Update UI
+                self.lat_input.setText(f"{lat:.7f}")
+                self.lon_input.setText(f"{lon:.7f}")
+                self.alt_input.setText(f"{z + self.ref_altitude_:.2f}")
+                self.pitch_input.setText(f"{pitch:.2f}")
+                self.yaw_input.setText(f"{yaw:.2f}")
+                self.roll_input.setText(f"{roll:.2f}")
+            else:
+                print("No camera response from visualizer!")
+
 
     def load_scenario(self):
         folder = QFileDialog.getExistingDirectory(
