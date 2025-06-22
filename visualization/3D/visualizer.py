@@ -136,6 +136,13 @@ def visualize_pointcloud_worker(base_folder, initial_timestamp, selected_nodes, 
                         view_ctrl = vis.get_view_control()
                         params = view_ctrl.convert_to_pinhole_camera_parameters()
                         conn.send(params.extrinsic)
+
+                        # # put the temporary screenshot code here
+                        # screenshot_path = "/home/minghao/Documents/Gits/OutdoorSensorNodes/CoInfra/screenshot_open3d.png"
+                        # vis.update_renderer()
+                        # vis.poll_events()
+                        # vis.capture_screen_image(screenshot_path, do_render=True)
+                        # print(f"Screenshot saved to {screenshot_path}")
                         continue
             # --- Handle the usual point cloud update message (backward compatible)
             try:
@@ -198,12 +205,12 @@ class MainWindow(QWidget):
         self.ref_easting_ = 537132.0
         self.ref_northing_ = 4813391.0
         self.ref_altitude_ = 0.0  # Reference altitude for the camera
-        self.camera_lat = 43.4762156
-        self.camera_lon = -80.5483912
-        self.camera_alt = 71.0
-        self.camera_pitch = 35.0
-        self.camera_yaw = 10.69
-        self.camera_roll = 0.0
+        self.camera_lat = 43.4763428
+        self.camera_lon = -80.5483166
+        self.camera_alt = 72.0
+        self.camera_pitch = -7.38
+        self.camera_yaw = 12.2
+        self.camera_roll = 149.29
         self.utm_zone = 17      # Set your UTM zone and letter
         self.utm_letter = 'T'   # as appropriate for your data
 
@@ -413,6 +420,9 @@ class MainWindow(QWidget):
         cmap = plt.get_cmap('tab10')
         self.node_colors = {node_id: cmap(
             i % 10)[:3] for i, node_id in enumerate(sorted(self.selected_nodes))}
+        # Manually set the color for node 11 to avoid using gray
+        self.node_colors[11] = (0.596, 0.8, 0.5)  # light yellow for node 11
+
 
         if self.pcd_process is None or not self.pcd_process.is_alive():
             # Setup a new pipe and process if not running

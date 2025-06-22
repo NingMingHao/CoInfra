@@ -8,9 +8,10 @@ import plotly.graph_objects as go
 import glob
 import copy
 from natsort import natsorted
+import imageio.v2 as imageio
 
 BASE_FOLDER_PATH = os.path.expanduser(
-    '~/Documents/Gits/OutdoorSensorNodes/CoInfra/example_data/2025_02_12_16_37_heavysnow')
+    '/media/minghao/Data2TB/CoInfraProcessedData/2025_03_27_16_53_sunny')
 
 
 class CoInfraVisualizer:
@@ -110,6 +111,8 @@ class CoInfraVisualizer:
 
     def load_yaml_obstacles(self, frame_folder, node_id):
         path = os.path.join(frame_folder, f"{node_id}_roi.yaml")
+        if node_id == 'global':
+            path = os.path.join(frame_folder, "global.yaml")
         if os.path.exists(path):
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
@@ -147,14 +150,25 @@ class CoInfraVisualizer:
 
             fig.add_trace(go.Scatter(x=x, y=y, mode='lines', line=dict(
                 color='black', width=5), showlegend=False, hoverinfo='skip'))
+            if 'by-id' in color:
+                obj_color = "hsl({},100%,50%)".format(
+                    (int(obj['id']) * 150) % 360)
+            else:
+                obj_color = color
             fig.add_trace(go.Scatter(x=x, y=y, mode='lines', line=dict(
-                color=color, width=2), name=name, text=[hover_text]*len(x), hoverinfo='text'))
+                color=obj_color, width=2), name=name, text=[hover_text]*len(x), hoverinfo='text'))
+            # --- Add text label near box
+            fig.add_trace(go.Scatter(
+                x=[cx], y=[cy], text=[f"{obj['id']}:{obj['label']}"], mode='text',
+                textposition='top center', showlegend=False, hoverinfo='skip',
+                textfont=dict(size=13, color='yellow')
+            ))
 
             arrow_len = 0.6 * l
             arrow_end = [cx + arrow_len *
                          np.cos(heading), cy + arrow_len * np.sin(heading)]
             fig.add_trace(go.Scatter(x=[cx, arrow_end[0]], y=[cy, arrow_end[1]], mode='lines+markers', line=dict(
-                color=color, width=2), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
+                color=obj_color, width=2), marker=dict(size=2), showlegend=False, hoverinfo='skip'))
 
     def get_available_folders(self, root_dir):
         folders = natsorted([f for f in glob.glob(
@@ -216,7 +230,8 @@ class CoInfraVisualizer:
                         options=self.default_options,
                         value=self.default_folder,
                     ),
-                    html.Button('Load Folder', id='load-folder', n_clicks=0)
+                    html.Button('Load Folder', id='load-folder', n_clicks=0),
+                    html.Button('Export GIF', id='export-gif', n_clicks=0)
                 ], style={'width': '30%', 'display': 'inline-block', 'verticalAlign': 'top'}),
 
                 html.Div([
@@ -341,7 +356,7 @@ class CoInfraVisualizer:
 
             if view_mode == 'global':
                 self.draw_bbox_on_fig(
-                    fig, self.cached_obstacles[frame]['global'], color='red', node_id='global', global_mode=True)
+                    fig, self.cached_obstacles[frame]['global'], color='by-id', node_id='global', global_mode=True)
             else:
                 for i, nid in enumerate(enabled_nodes):
                     obj_list = self.cached_obstacles[frame][nid]
@@ -358,6 +373,60 @@ class CoInfraVisualizer:
                 l=10, r=10, t=40, b=40), showlegend=False, paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)')
             return fig, len(self.frame_list)-1, {i: f if i % max(10,(len(self.frame_list)//10)) == 0 else '' for i, f in enumerate(self.frame_list)}, [{'label': nid, 'value': nid} for nid in self.INTEREST_NODES]
+        
+        @self.app.callback(
+            Output('export-gif', 'children'),
+            Input('export-gif', 'n_clicks'),
+            [State('base-layer', 'value'),
+             State('view-mode', 'value'),
+                State('node-selection', 'value'),
+                State('folder-path', 'value')],
+            prevent_initial_call=True
+            )
+        def export_gif(n_clicks, base_layer, view_mode, enabled_nodes, folder):
+            if n_clicks == 0 or not self.frame_list:
+                return 'Export GIF'
+            # Collect images
+            images = []
+            for frame_idx, frame in enumerate(self.frame_list):
+                # Create base image
+                base = self.render_base_image(base_layer, view_mode, enabled_nodes)
+                base_fig = go.Figure()
+                base_fig.add_trace(go.Image(z=base, x0=self.min_x, y0=self.max_y -
+                                self.img_size/self.scale, dx=1/self.scale, dy=1/self.scale))
+                base_fig.update_xaxes(
+                    range=[self.min_x, self.min_x + self.img_size/self.scale], constrain='domain')
+                base_fig.update_yaxes(range=[
+                                    self.max_y - self.img_size/self.scale, self.max_y], scaleanchor='x', constrain='domain')
+                # remove the x and y axis ticks and lines
+                base_fig.update_xaxes(showticklabels=False, ticks='', showgrid=False)
+                base_fig.update_yaxes(showticklabels=False, ticks='', showgrid=False)
+                base_fig.update_layout(height=800, width=800, margin=dict(
+                    l=10, r=10, t=40, b=40), showlegend=False)
+
+                # Overlay bbox
+                fig = go.Figure(base_fig)
+                if view_mode == 'global':
+                    self.draw_bbox_on_fig(
+                        fig, self.cached_obstacles[frame]['global'], color='by-id', node_id='global', global_mode=True)
+                else:
+                    for i, nid in enumerate(enabled_nodes):
+                        obj_list = self.cached_obstacles[frame][nid]
+                        tf = self.ground_to_global_dict[nid]
+                        self.draw_bbox_on_fig(
+                            fig, obj_list, node_id=nid, global_mode=False, transform=tf)
+                # Save temp PNG
+                tmp_folder_path = '/tmp/coinfra_frames'
+                os.makedirs(tmp_folder_path, exist_ok=True)
+                tmp_path = os.path.join(tmp_folder_path, f'frame_{frame_idx}.png')
+                print(f"Saving frame {frame_idx} to temporary file: {tmp_path}")
+                fig.write_image(tmp_path, format='png',
+                                scale=1, width=800, height=800)
+                images.append(imageio.imread(tmp_path))
+            # Write GIF
+            gif_path = os.path.join(tmp_folder_path, 'coinfra_frames.gif')
+            imageio.mimsave(gif_path, images, duration=0.1)
+            return f'GIF saved: {gif_path}'
 
     def run(self):
         self.app.run(debug=False)
