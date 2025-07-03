@@ -23,7 +23,9 @@ The **codebase** includes:
 
 
 📄 **[Paper PDF](link_to_pdf TODO)**  
+
 📦 **[Dataset Download](#-dataset-download)**
+
 📂 **[Codebase Overview](#-codebase-structure)**
 
 ---
@@ -98,10 +100,17 @@ We provide a reference hardware setup for building your own cooperative percepti
 
 ### Software
 - **Web-based UI**: A web interface for managing multiple nodes, performing OTA updates, and visualizing real-time data.
+
+https://github.com/user-attachments/assets/9c3608b3-60ae-4264-9ac4-75645ee72e61
+
 - **ROS-based Sensor Node**: 
-    TODO
-- **ROS-based Cloud**: 
-    TODO
+
+https://github.com/user-attachments/assets/fadb0823-bf05-40ba-bf7d-ef75eff47a59
+
+- **ROS-based Cloud**:
+
+https://github.com/user-attachments/assets/85d6775d-1d87-45d4-a888-b4c1d04c6a6a
+
 ---
 
 **More detailed documentation is in [docs/SETUP.md](docs/SETUP.md)**
