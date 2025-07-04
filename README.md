@@ -22,7 +22,7 @@ The **codebase** includes:
 
 
 
-📄 **[Paper PDF](link_to_pdf TODO)**  
+📄 **[Arxiv Paper](https://arxiv.org/abs/2507.02245)**  
 
 📦 **[Dataset Download](#-dataset-download)**
 
@@ -48,7 +48,7 @@ The CoInfra dataset includes around:
 ### 🔗 Download Links
 - A mini example dataset (1 slice, 1 scenario) is available for quick testing: [Mini Example Dataset](https://1drv.ms/u/c/12049174acdd4fe9/EeHlooyO6xdJnESRSzNbhQwBXJTbgYr2jJzK3Sn6ZVOFiw?e=REqKqV)
 - Email to [MVS-Lab@uwaterloo.ca](mailto:MVS-Lab@uwaterloo.ca) for requesting the data
-- More links will be provided in the future
+- Download the dataset from HuggingFace: [![Static Badge](https://img.shields.io/badge/Download-grey?style=plastic&logo=huggingface&logoColor=yellow)](https://huggingface.co/datasets/MinghaoNing/CoInfra)
 
 Refer to [`docs/DATASET.md`](docs/DATASET.md) for data format, structure, and annotation schema.
 
@@ -137,7 +137,8 @@ If you use CoInfra, please cite:
 @article{ning2025coinfra,
   title={CoInfra: A Large-Scale Cooperative Infrastructure Perception System and Dataset in Adverse Weather},
   author={Ning, Minghao and Yang, Yufeng and Shu, Keqi and Huang, Shucheng and Zhong, Jiaming and Salehi, Maryam and Rahmani, Mahdi and Lu, Yukun and Sun, Chen and Saleh, Aladdin and Hashemi, Ehsan and Khajepour, Amir},
-  journal={arXiv preprint arXiv:TODO},
+  journal={arXiv preprint arXiv:2507.02245},
+  url={https://arxiv.org/abs/2507.02245},
   year={2025}
 }
 ```

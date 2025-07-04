@@ -1,7 +1,46 @@
+
+## Data Structure and Compression Rationale
+
+The CoInfra dataset is organized by scenario (e.g., 2025_02_12_heavysnow) and further divided into smaller units called slices. Each slice directory contains all necessary resources for independent research, including:
+* Raw sensor data (LiDAR, camera)
+* Calibration files
+* HD map data
+* 3D bounding box annotations
+
+To facilitate flexible and efficient downloads, the dataset is split into multiple compressed archives (~10GB per file), each corresponding to a set of slices from the same scenario. This structure allows users to:
+* Download only the slices they need for their research
+* Avoid downloading the entire dataset, which is over 200GB
+* Manage storage space effectively
+* Resume interrupted downloads without needing to re-download the entire dataset
+
+Each compressed file is named in the following format:
+```bash
+[scenario]_[first-slice]-[last-slice].tar.zst
+# Example: 2025_02_12_heavysnow_slice_0-slice_4.tar.zst
+```
+
+## Extraction Instructions
+The archives are compressed using `zstd` for fast decompression. To extract the dataset, you need to have `zstd` installed. You can install it via package managers like `apt`, `brew`. 
+
+**To extract an archive, use the following command:**
+```bash
+tar --use-compress-program=zstd -xf [archive_file.tar.zst]
+```
+
+**To extract all archives in a directory, you can use:**
+```bash
+for archive in *.tar.zst; do
+    echo "Extracting $archive..."
+    tar --use-compress-program=zstd -xf "$archive"
+done
+```
+
+
+
 ## Dataset Folder Structure
 
 ```bash
-scenario-folder1/ (e.g., 2025_03_24_17_04_rainy/)
+scenario-folder1/ (e.g., 2025_03_24_rainy/)
 ├── slice-folder/ (e.g., slice_0/)
 │   ├── PcImage/
 │   │   └── timestamp (e.g., 1742850299.2/)
