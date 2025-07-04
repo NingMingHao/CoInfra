@@ -1,5 +1,13 @@
 # CoInfra: A Large-Scale Cooperative Infrastructure Perception System and Dataset in Adverse Weather
 
+📄 **[Arxiv Paper](https://arxiv.org/abs/2507.02245)**  
+
+📦 **[Dataset Download](#-dataset-download)**
+
+📂 **[Codebase Overview](#-codebase-structure)**
+
+🏗️ **[Build Your Own Cooperative Perception System](#️-build-your-own-cooperative-perception-system)**
+
 **CoInfra** is a real-world, large-scale cooperative perception system and dataset designed to support research in multi-agent perception, especially under **adverse weather conditions** (snow, rain, freezing rain). It features 14 synchronized infrastructure nodes, each with a LiDAR and dual cameras, deployed across a shared region for full-scene coverage.
 
 <div style="text-align:center">
@@ -20,13 +28,6 @@ The **codebase** includes:
 - [ ] Baseline models for early and late fusion
 - [ ] A ROS-based Sensor Node level and Cloud level late fusion system
 
-
-
-📄 **[Arxiv Paper](https://arxiv.org/abs/2507.02245)**  
-
-📦 **[Dataset Download](#-dataset-download)**
-
-📂 **[Codebase Overview](#-codebase-structure)**
 
 ---
 
